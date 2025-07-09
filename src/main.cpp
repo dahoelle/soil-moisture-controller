@@ -8,11 +8,13 @@ ServiceRegistry registry;
 EEPROMService service_eeprom(registry, scheduler);
 WiFiService service_wifi(registry, scheduler);
 WebServerService service_webserver(registry, scheduler);
+SDCardService service_sdcard(registry, scheduler);
 
 std::vector<IService*> coreServices = {
     &service_eeprom,
     &service_wifi,
     &service_webserver,
+    &service_sdcard,
 };
 
 size_t currentServiceIndex = 0;
@@ -49,6 +51,7 @@ void startApp() {
     registry["EEPROM"] = &service_eeprom;
     registry["WIFI"] = &service_wifi;
     registry["WEBSERVER"] = &service_webserver;
+    registry["SDCARD"] = &service_sdcard;
 
     currentServiceIndex = 0;
     waitingForReady = false;
@@ -66,7 +69,7 @@ void updateApp() {
             Serial.println(": Service ready.");
             currentServiceIndex++;
             waitingForReady = false;
-            startNextService();  // start next service
+            startNextService();
         }
     }
 }

@@ -1,6 +1,7 @@
 #ifndef SERVICE_WEBSRV_H
 #define SERVICE_WEBSRV_H
 
+#include <ArduinoJson.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebSrv.h>
 
@@ -32,43 +33,53 @@ public:
         });
 
         // /wifi-config/ PUT endpoint: saves ssid & pass to EEPROMService
-        server.on("/wifi-config/", HTTP_PUT, [this](AsyncWebServerRequest* req) {
-            if (!req->hasParam("SSID", true) || !req->hasParam("PASS", true)) {
-                req->send(400, "application/json", "{\"error\":\"Missing ssid or passkey\"}");
-                return;
+        server.on("/wifi-config/", HTTP_PUT,
+            [](AsyncWebServerRequest *req) {
+                // Dummy handler to match the route
+            },
+            nullptr,
+            [this](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
+                DynamicJsonDocument doc(256);
+                DeserializationError error = deserializeJson(doc, data, len);
+
+                if (error) {
+                    req->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+                    return;
+                }
+
+                String ssid = doc["ssid"] | "";
+                String pass = doc["pass"] | "";
+
+                if (ssid.length() == 0 || pass.length() == 0) {
+                    req->send(400, "application/json", "{\"error\":\"Missing ssid or pass\"}");
+                    return;
+                }
+
+                EEPROMService* eeprom = registry.get<EEPROMService>("EEPROM");
+                if (!eeprom) {
+                    req->send(500, "application/json", "{\"error\":\"EEPROMService not available\"}");
+                    return;
+                }
+
+                eeprom->registerStaticEntry("SSID", 64);
+                eeprom->registerStaticEntry("PASS", 64);
+
+                char ssidBuf[64] = {0};
+                char passBuf[64] = {0};
+
+                ssid.toCharArray(ssidBuf, 64);
+                pass.toCharArray(passBuf, 64);
+
+                Serial.printf("Got WiFi config: ssid=%s, pass=%s\n", ssid.c_str(), pass.c_str());
+
+                eeprom->write("SSID", ssidBuf);
+                eeprom->write("PASS", passBuf);
+
+                req->send(200, "application/json", "{\"status\":\"success\"}");
+
+                scheduler.addTask([]() {ESP.restart();}, 100, false);
             }
-
-            String ssid = req->getParam("SSID", true)->value();
-            String pass = req->getParam("PASS", true)->value();
-
-            if (ssid.length() > 63 || pass.length() > 63) {
-                req->send(400, "application/json", "{\"error\":\"ssid and passkey max length is 63\"}");
-                return;
-            }
-
-            EEPROMService* eeprom = registry.get<EEPROMService>("EEPROM");
-            if (!eeprom) {
-                req->send(500, "application/json", "{\"error\":\"EEPROMService not available\"}");
-                return;
-            }
-
-            eeprom->registerStaticEntry("SSID", 64);
-            eeprom->registerStaticEntry("PASS", 64);
-
-            char ssidBuf[64] = {0};
-            char passBuf[64] = {0};
-
-            ssid.toCharArray(ssidBuf, 64);
-            pass.toCharArray(passBuf, 64);
-
-            eeprom->write("SSID", ssidBuf);
-            eeprom->write("PASS", passBuf);
-
-            req->send(200, "application/json", "{\"status\":\"success\"}");
-
-            // Schedule restart after response sent
-            scheduler.addTask([]() -> bool {ESP.restart();}, 100, false);
-        });
+        );
 
         // 404 handler
         server.onNotFound([](AsyncWebServerRequest* req) {
