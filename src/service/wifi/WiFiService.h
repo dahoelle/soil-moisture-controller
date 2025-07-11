@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <Arduino.h>
+#include <time.h>
 
 #include "../IService.h"
 #include "../ServiceRegistry.h"
@@ -12,12 +13,7 @@
 
 class WiFiService : public IService {
 public:
-    WiFiService(ServiceRegistry& registry, Scheduler& scheduler, const char* tag = "WiFiService") 
-        : registry(registry), scheduler(scheduler), TAG(tag), isReady(false), apMode(false) {}
-
-    const char* getTag() const override {
-        return TAG;
-    }
+    WiFiService(ServiceRegistry& registry, Scheduler& scheduler, const char* tag = "WiFiService") : registry(registry), scheduler(scheduler), TAG(tag), isReady(false), apMode(false) {}
 
     void start() override {
         EEPROMService* eeprom = registry.get<EEPROMService>("EEPROM");
@@ -64,6 +60,27 @@ public:
                 Serial.println("WiFiService: Connected!");
                 Serial.print("Local IP: ");
                 Serial.println(WiFi.localIP());
+
+                // NTP setup
+                configTime(3600, 0, "pool.ntp.org", "time.nist.gov");
+
+                Serial.print("WiFiService: Syncing time via NTP");
+                time_t now = time(nullptr);
+                int retry = 0;
+                while (now < 8 * 3600 * 2 && retry++ < 20) {
+                    delay(500);
+                    Serial.print(".");
+                    now = time(nullptr);
+                }
+                Serial.println();
+
+                if (now < 8 * 3600 * 2) {
+                    Serial.println("WiFiService: NTP sync failed. Time not set.");
+                } else {
+                    Serial.print("WiFiService: Time synced: ");
+                    Serial.println(ctime(&now));
+                }
+
                 isReady = true;
                 apMode = false;
                 return;
@@ -79,9 +96,8 @@ public:
     }
 
     void update(unsigned long) override {
-        if (apMode) {
+        if (apMode)
             dnsServer.processNextRequest();
-        }
     }
 
     unsigned long cycleTimeMs() const override {
@@ -91,6 +107,23 @@ public:
     bool ready() const override {
         return isReady;
     }
+
+    const char* getTag() const override {
+        return "WiFiService";
+    }
+
+    bool getTime(struct tm* timeInfo) const {
+        return getLocalTime(timeInfo);
+    }
+
+    time_t getUnixTime() const {
+        return time(nullptr);
+    }
+
+    bool isTimeSynced() const {
+        return time(nullptr) > 8 * 3600 * 2;
+    }
+
 
 private:
     ServiceRegistry& registry;

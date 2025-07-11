@@ -5,6 +5,8 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <Adafruit_NeoPixel.h>
+#include "mbedtls/sha256.h"
+
 
 #include "../IService.h"
 #include "../ServiceRegistry.h"
@@ -13,11 +15,12 @@
 #include "../../scheduler/scheduler.h"
 #include "index_html.h"
 #include "editor_html.h"
+#include "login_html.h"
+
 
 class WebServerService : public IService {
 public:
-    WebServerService(ServiceRegistry& registry, Scheduler& scheduler, const char* tag = "WebServerService")
-        : scheduler(scheduler), server(80), registry(registry), TAG(tag), isReady(false) {}
+    WebServerService(ServiceRegistry& registry, Scheduler& scheduler, const char* tag = "WebServerService") : scheduler(scheduler), server(80), registry(registry), TAG(tag), isReady(false) {}
 
     void start() override {
         strip.begin();
@@ -25,7 +28,7 @@ public:
 
         sd = registry.get<SDCardService>("SDCARD");
 
-        // Redirects for captive portal detection and nonsense requests
+        // CAPTIVE PORTAL REDIRECTS
         server.on("/connecttest.txt", [](AsyncWebServerRequest* req) { req->redirect("/"); });
         server.on("/wpad.dat", [](AsyncWebServerRequest* req) { req->send(404); });
         server.on("/generate_204", [](AsyncWebServerRequest* req) { req->redirect("/"); });
@@ -35,18 +38,105 @@ public:
         server.on("/success.txt", [](AsyncWebServerRequest* req) { req->send(200); });
         server.on("/ncsi.txt", [](AsyncWebServerRequest* req) { req->redirect("/"); });
 
-        // Serve main pages
-        server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
-            req->send(200, "text/html", INDEX_HTML);
-        });
-        server.on("/editor", HTTP_GET, [](AsyncWebServerRequest* req) {
-            req->send(200, "text/html", EDITOR_HTML);
-        });
+        // STATIC PAGES
+        server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {req->send(200, "text/html", INDEX_HTML);});
+        server.on("/editor", HTTP_GET, [](AsyncWebServerRequest* req) { req->send(200, "text/html", EDITOR_HTML);});
+        server.on("/login", HTTP_GET, [](AsyncWebServerRequest* req) {req->send(200, "text/html", LOGIN_HTML);});
 
-        // WiFi config endpoint (PUT with JSON body)
-        server.on("/wifi-config/", HTTP_PUT, [](AsyncWebServerRequest *req) {}, nullptr,
+        //AUTH HANDLE
+        server.on("/auth", HTTP_POST,
+            [](AsyncWebServerRequest *req) {
+                if (req->contentLength() == 0)
+                    req->send(400, "application/json", "{\"error\":\"Empty body\"}");
+                if (req->_tempObject != nullptr) 
+                    return;
+            },nullptr,
             [this](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
-                if (index != 0) return; // only process once when index == 0
+                if (index != 0) 
+                    return;
+                DynamicJsonDocument doc(512);
+                if (deserializeJson(doc, data, len)) {
+                    req->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+                    return;
+                }
+
+                String username = doc["name"] | "";
+                String password = doc["pass"] | "";
+
+                if (username == "" || password == "") {
+                    req->send(400, "application/json", "{\"error\":\"Missing name or pass\"}");
+                    return;
+                }
+
+                if (!sd || !sd->ready()) {
+                    req->send(500, "application/json", "{\"error\":\"SD card not ready\"}");
+                    return;
+                }
+
+                File configFile = sd->openFile("/config.json", FILE_READ);
+                if (!configFile) {
+                    req->send(500, "application/json", "{\"error\":\"Failed to read config.json\"}");
+                    return;
+                }
+
+                DynamicJsonDocument cfg(2048);
+                DeserializationError err = deserializeJson(cfg, configFile);
+                configFile.close();
+                if (err) {
+                    req->send(500, "application/json", "{\"error\":\"Bad config.json\"}");
+                    return;
+                }
+
+                bool found = false;
+                String cookie;
+                for (JsonObject user : cfg["administrators"].as<JsonArray>()) {
+                    String name = user["name"] | "";
+                    String salt = user["salt"] | "";
+                    String hash = user["hash"] | "";
+
+                    if (name != username) 
+                        continue;
+
+                    // SHA256(salt + password)
+                    String toHash = salt + password;
+                    uint8_t digest[32];
+                    mbedtls_sha256_context ctx;
+                    mbedtls_sha256_init(&ctx);
+                    mbedtls_sha256_starts(&ctx, 0);  // 0 = SHA-256, 1 = SHA-224
+                    mbedtls_sha256_update(&ctx, (const unsigned char*)toHash.c_str(), toHash.length());
+                    mbedtls_sha256_finish(&ctx, digest);
+                    mbedtls_sha256_free(&ctx);
+
+                    char hex[65] = {0};
+                    for (int i = 0; i < 32; ++i) sprintf(hex + i * 2, "%02x", digest[i]);
+
+                    if (hash == String(hex)) {
+                        found = true;
+                        cookie = "auth=" + name + "; Max-Age=2592000; Path=/"; // 30 days
+                        break;
+                    }
+                }
+
+                if (found) {
+                    AsyncWebServerResponse* res = req->beginResponse(200, "application/json", "{\"status\":\"ok\"}");
+                    res->addHeader("Set-Cookie", cookie);
+                    req->send(res);
+                } else {
+                    req->send(403, "application/json", "{\"error\":\"Auth failed\"}");
+                }
+            }
+        );
+
+        server.on("/wifi-config/", HTTP_PUT, 
+            [this](AsyncWebServerRequest *req) { // AUTH REQUIRED
+                if (!isAuthenticated(req)) {
+                    req->send(403, "text/plain", "Forbidden");
+                    return;
+                }
+            }, nullptr,
+            [this](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
+                if (index != 0) 
+                    return;
                 DynamicJsonDocument doc(256);
                 DeserializationError error = deserializeJson(doc, data, len);
 
@@ -86,9 +176,9 @@ public:
                 req->send(200, "application/json", "{\"status\":\"success\"}");
 
                 scheduler.addTask([]() { ESP.restart(); }, 100, false);
-            });
+            }
+        );
 
-        // LED control endpoint (POST with JSON body)
         server.on("/led/", HTTP_POST, [](AsyncWebServerRequest *req) {}, nullptr,
             [this](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
                 if (index != 0) return; // only process once
@@ -126,10 +216,14 @@ public:
                 String response;
                 serializeJson(res, response);
                 req->send(200, "application/json", response);
-            });
-
+            }
+        );
 
         server.on("/api/file/*", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            if (!isAuthenticated(req)) {
+                req->send(403, "text/plain", "Forbidden");
+                return;
+            }
             String path = req->url(); 
             String wildcard = path.substring(strlen("/api/file")); 
             
@@ -154,68 +248,74 @@ public:
             req->send(req->beginResponse(file, wildcard, "application/octet-stream", false));
         });
 
-        server.on("/api/file/*", HTTP_PUT, [this](AsyncWebServerRequest *req) {
-            if (req->contentLength() == 0) {
-                req->send(400, "application/json", "{\"error\":\"Empty body\"}");
-                return;
+        server.on("/api/file/*", HTTP_PUT, 
+            [this](AsyncWebServerRequest *req) { // AUTH REQUIRED
+                if (!isAuthenticated(req)) {
+                    req->send(403, "text/plain", "Forbidden");
+                    return;
+                }
+                if (req->contentLength() == 0) {
+                    req->send(400, "application/json", "{\"error\":\"Empty body\"}");
+                    return;
+                }
+            }, nullptr,
+            [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+                if (index != 0)
+                    return;  // handle only once
+
+                if (!sd || !sd->ready()) {
+                    req->send(500, "application/json", "{\"error\":\"SD card not ready\"}");
+                    return;
+                }
+
+                String fullUrl = req->url();  // e.g. "/api/file/path/to/file.txt"
+                String filepath = fullUrl.substring(strlen("/api/file")); // "/path/to/file.txt"
+                if (!filepath.startsWith("/")) filepath = "/" + filepath;
+
+                // JSON payload expected to be: { "content": "the file contents here" }
+                DynamicJsonDocument doc(2048);
+                auto err = deserializeJson(doc, data, len);
+                if (err) {
+                    req->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+                    return;
+                }
+
+                String content = doc["content"] | "";
+                if (content.length() == 0) {
+                    req->send(400, "application/json", "{\"error\":\"Missing content\"}");
+                    return;
+                }
+
+                if (filepath.indexOf("..") != -1) {
+                    req->send(400, "application/json", "{\"error\":\"Invalid file path\"}");
+                    return;
+                }
+
+                File file = sd->openFile(filepath, "w");
+                if (!file) {
+                    req->send(500, "application/json", "{\"error\":\"Failed to open file for writing\"}");
+                    return;
+                }
+
+                size_t written = file.print(content);
+                file.close();
+
+                if (written != content.length()) {
+                    req->send(500, "application/json", "{\"error\":\"Failed to write full content\"}");
+                    return;
+                }
+
+                req->send(200, "application/json", "{\"status\":\"saved\"}");
             }
-        }, nullptr,
-        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
-            if (index != 0)
-                return;  // handle only once
-
-            if (!sd || !sd->ready()) {
-                req->send(500, "application/json", "{\"error\":\"SD card not ready\"}");
-                return;
-            }
-
-            String fullUrl = req->url();  // e.g. "/api/file/path/to/file.txt"
-            String filepath = fullUrl.substring(strlen("/api/file")); // "/path/to/file.txt"
-            if (!filepath.startsWith("/")) filepath = "/" + filepath;
-
-            // JSON payload expected to be: { "content": "the file contents here" }
-            DynamicJsonDocument doc(2048);
-            auto err = deserializeJson(doc, data, len);
-            if (err) {
-                req->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-                return;
-            }
-
-            String content = doc["content"] | "";
-            if (content.length() == 0) {
-                req->send(400, "application/json", "{\"error\":\"Missing content\"}");
-                return;
-            }
-
-            if (filepath.indexOf("..") != -1) {
-                req->send(400, "application/json", "{\"error\":\"Invalid file path\"}");
-                return;
-            }
-
-            File file = sd->openFile(filepath, "w");
-            if (!file) {
-                req->send(500, "application/json", "{\"error\":\"Failed to open file for writing\"}");
-                return;
-            }
-
-            size_t written = file.print(content);
-            file.close();
-
-            if (written != content.length()) {
-                req->send(500, "application/json", "{\"error\":\"Failed to write full content\"}");
-                return;
-            }
-
-            req->send(200, "application/json", "{\"status\":\"saved\"}");
-        });
-
-
+        );
 
         // Not found handler for everything else
-        server.onNotFound([](AsyncWebServerRequest* req) {
-            Serial.printf("404 Not Found: %s\n", req->url().c_str());
-            req->send(404, "text/plain", "Not found");
-        });
+        server.onNotFound(
+            [](AsyncWebServerRequest* req) {
+                Serial.printf("404 Not Found: %s\n", req->url().c_str());
+                req->send(404, "text/plain", "Not found");
+            }
+        );
 
         server.begin();
         isReady = true;
@@ -248,6 +348,14 @@ private:
     Adafruit_NeoPixel strip{1, 8, NEO_GRB + NEO_KHZ800};
 
     SDCardService* sd;
+    WiFiService* wifi;
+
+    bool isAuthenticated(AsyncWebServerRequest* req) {
+        if (!req->hasHeader("Cookie")) 
+            return false;
+        String cookie = req->header("Cookie");
+        return cookie.indexOf("auth=admin") != -1;
+    }
 };
 
 #endif
