@@ -13,8 +13,8 @@ SDCardService service_sdcard(registry, scheduler);
 std::vector<IService*> coreServices = {
     &service_eeprom,
     &service_wifi,
-    &service_webserver,
     &service_sdcard,
+    &service_webserver,
 };
 
 size_t currentServiceIndex = 0;

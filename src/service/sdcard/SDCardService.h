@@ -21,8 +21,7 @@ public:
         Serial.print(TAG);
         Serial.println(": Initializing SD card with fixed SPI pins.");
 
-        // Initialize SPI with fixed pins
-        SPI.begin();//SCK, MOSI, MISO, CS);
+        SPI.begin();
 
         if (!SD.begin(CS)) {
             Serial.println(TAG);
@@ -34,25 +33,39 @@ public:
         Serial.println(TAG);
         Serial.println(": SD card initialized.");
 
-        // Example file write test
-        File file = SD.open("/test.txt", FILE_WRITE);
-        if (file) {
-            file.println("SDCardService test write.");
+
+
+
+        if (!SD.exists("/config.json")) {
+            Serial.println("Creating default config.json on SD card...");
+
+            File file = SD.open("/config.json", FILE_WRITE);
+            if (!file) {
+                Serial.println("Failed to create config.json!");
+                return;
+            }
+
+            // Write a simple default JSON object — adjust as you want
+            const char* defaultJson = R"({
+            "ssid": "default_ssid",
+            "pass": "default_pass"
+            })";
+
+            file.print(defaultJson);
             file.close();
-            Serial.println(TAG);
-            Serial.println(": Wrote to /test.txt");
+
+            Serial.println("config.json created successfully.");
         } else {
-            Serial.println(TAG);
-            Serial.println(": Failed to open /test.txt for writing");
+            Serial.println("config.json already exists.");
         }
 
-        if (SD.exists("/test.txt")) {
-            Serial.println(TAG);
-            Serial.println(": /test.txt exists on SD card");
-        } else {
-            Serial.println(TAG);
-            Serial.println(": /test.txt does NOT exist");
-        }
+
+
+            
+
+
+
+
 
         isReady = true;
     }
@@ -69,36 +82,81 @@ public:
         return isReady;
     }
 
+    //==== API ======
+    bool fileExists(const String& path) {
+        return SD.exists(path);
+    }
+
+    bool removeFile(const String& path) {
+        return SD.remove(path);
+    }
+
+    bool createFile(const String& path, const String& content = "") {
+        File file = SD.open(path, FILE_WRITE);
+        if (!file) return false;
+        if (content.length()) file.print(content);
+        file.close();
+        return true;
+    }
+    File openFile(const String& path, const char* mode) {
+        return SD.open(path, mode);
+    }
+    bool readFile(const String& path, String& outContent) {
+        File file = SD.open(path, FILE_READ);
+        if (!file) return false;
+        outContent = "";
+        while (file.available()) outContent += (char)file.read();
+        file.close();
+        return true;
+    }
+
+    bool writeFile(const String& path, const String& content) {
+        File file = SD.open(path, FILE_WRITE);
+        if (!file) return false;
+        file.print(content);
+        file.close();
+        return true;
+    }
+
+    bool appendFile(const String& path, const String& content) {
+        File file = SD.open(path, FILE_APPEND);
+        if (!file) return false;
+        file.print(content);
+        file.close();
+        return true;
+    }
+
+    bool createDir(const String& path) {
+        return SD.mkdir(path);
+    }
+
+    bool removeDir(const String& path) {
+        return SD.rmdir(path);
+    }
+
+    bool listDir(const String& path, String& outList, int depth = 1) {
+        File root = SD.open(path);
+        if (!root || !root.isDirectory()) return false;
+
+        File file = root.openNextFile();
+        while (file) {
+            outList += file.name();
+            outList += file.isDirectory() ? "/\n" : "\n";
+            file = root.openNextFile();
+        }
+        return true;
+    }
+
 private:
     ServiceRegistry& registry;
     Scheduler& scheduler;
     const char* TAG;
     bool isReady;
-    /* config from https://www.reddit.com/r/esp32/comments/1awyih5/esp32c6_sdcard/?share_id=jdAB0gQoyfKai_9zwDq9X&utm_medium=ios_app&utm_name=ioscss&utm_source=share&utm_term=1
-    static constexpr uint8_t CS = 18;//1;
-    static constexpr uint8_t SCK = 21;//8;
-    static constexpr uint8_t MOSI = 19;//10;
-    static constexpr uint8_t MISO = 20;//11;
-    */
-   /*
-   //VSPI defaults
-   static constexpr uint8_t CS = 5;
-    static constexpr uint8_t SCK = 18;
-    static constexpr uint8_t MOSI = 23;
-    static constexpr uint8_t MISO = 19;
-    */
-   /*ESP32C6-SD-Card.pdf inner
-    static constexpr uint8_t CS = 18;
-    static constexpr uint8_t MISO = 19;
-    static constexpr uint8_t SCK = 20;
-    static constexpr uint8_t MOSI = 21;
-    */
-   ///*ESP32C6-SD-Card.pdf outer
+
     static constexpr uint8_t CS = 18;
     static constexpr uint8_t MOSI = 19;
     static constexpr uint8_t MISO = 20;
     static constexpr uint8_t SCK = 21;
-    
 };
 
 #endif

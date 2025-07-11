@@ -75,9 +75,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     .config-section {
       background: #2a2a2a;
-      padding: 1rem;
+      padding: 1rem 1.5rem;
       border-radius: 8px;
       max-width: 500px;
+      box-sizing: border-box;
     }
 
     .config-section h2 {
@@ -91,9 +92,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     input {
       width: 100%;
       padding: 0.5rem;
+      padding-right: 2rem;
       background: #1e1e1e;
       border: 1px solid #444;
       color: #ccc;
+      box-sizing: border-box;
     }
 
     button.save {
@@ -119,8 +122,26 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </header>
 
     <div id="home-panel" class="panel active">
-      <p>Home panel content</p>
+      <div class="config-section">
+        <h2>LED Control</h2>
+        <div class="row">
+          <label for="r">Red:</label>
+          <input type="number" id="r" min="0" max="255" />
+        </div>
+        <div class="row">
+          <label for="g">Green:</label>
+          <input type="number" id="g" min="0" max="255" />
+        </div>
+        <div class="row">
+          <label for="b">Blue:</label>
+          <input type="number" id="b" min="0" max="255" />
+        </div>
+        <button class="save" id="led-set">Set LED</button>
+        <button class="save" id="led-off">Turn OFF</button>
+      </div>
     </div>
+
+
 
     <div id="hydration-panel" class="panel">
       <p>Hydration panel content</p>
@@ -174,9 +195,50 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       });
     }
 
+    function updateLED() {
+      const r = parseInt(document.getElementById("r").value || 0);
+      const g = parseInt(document.getElementById("g").value || 0);
+      const b = parseInt(document.getElementById("b").value || 0);
+
+      fetch("/led/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ r, g, b })
+      })
+      .then(res => res.json())
+      .then(data => {
+        console.log("LED updated:", data);
+        alert("LED color set.");
+      })
+      .catch(err => {
+        console.error("LED update error:", err);
+        alert("Failed to update LED: " + err.message);
+      });
+    }
+
+    function turnOffLED() {
+      fetch("/led/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      })
+      .then(res => res.json())
+      .then(data => {
+        console.log("LED turned off:", data);
+        alert("LED turned off.");
+      })
+      .catch(err => {
+        console.error("LED off error:", err);
+        alert("Failed to turn off LED: " + err.message);
+      });
+    }
+
     document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("wifi-save").addEventListener("click", updateWifiConfig);
+      document.getElementById("led-set").addEventListener("click", updateLED);
+      document.getElementById("led-off").addEventListener("click", turnOffLED);
     });
+
   </script>
 
 </body>
