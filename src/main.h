@@ -14,13 +14,17 @@
 #include "service/wifi/WiFiService.h"
 #include "service/webserver/WebServerService.h"
 #include "service/sdcard/SDCardService.h"
+#include "service/webcookie/WebCookieService.h"
+#include "service/sensorlog/SensorLoggingService.h"
 
 extern Scheduler scheduler;
 
 extern EEPROMService service_eeprom;
 extern WiFiService service_wifi;
+extern WebCookieService service_webcookie;
 extern WebServerService service_webserver;
 extern SDCardService service_sdcard;
+extern SensorLoggingService service_sensorlog;
 
 void startApp();
 void updateApp();

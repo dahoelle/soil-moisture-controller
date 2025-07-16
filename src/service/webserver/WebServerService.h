@@ -13,10 +13,11 @@
 #include "../eeprom/EEPROMService.h"
 #include "../sdcard/SDCardService.h"
 #include "../../scheduler/scheduler.h"
-#include "index_html.h"
-#include "editor_html.h"
-#include "login_html.h"
-
+#include "html/index_html.h"
+#include "html/editor_html.h"
+#include "html/login_html.h"
+#include "html/graph_html.h"
+#include "html/filebrowser_html.h"
 
 class WebServerService : public IService {
 public:
@@ -42,16 +43,17 @@ public:
         server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {req->send(200, "text/html", INDEX_HTML);});
         server.on("/editor", HTTP_GET, [](AsyncWebServerRequest* req) { req->send(200, "text/html", EDITOR_HTML);});
         server.on("/login", HTTP_GET, [](AsyncWebServerRequest* req) {req->send(200, "text/html", LOGIN_HTML);});
-
+        server.on("/graph", HTTP_GET, [](AsyncWebServerRequest* req) {req->send(200, "text/html", GRAPH_HTML);});
+        server.on("/tree", HTTP_GET, [](AsyncWebServerRequest* req) {req->send(200, "text/html", FILEBROWSER_HTML);});
         //AUTH HANDLE
         server.on("/auth", HTTP_POST,
-            [](AsyncWebServerRequest *req) {
+            [](AsyncWebServerRequest *req) { //CONTENT ASSERTION
                 if (req->contentLength() == 0)
                     req->send(400, "application/json", "{\"error\":\"Empty body\"}");
                 if (req->_tempObject != nullptr) 
                     return;
             },nullptr,
-            [this](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
+            [this](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) { //CONTENT VALIDATION
                 if (index != 0) 
                     return;
                 DynamicJsonDocument doc(512);
@@ -108,11 +110,12 @@ public:
                     mbedtls_sha256_free(&ctx);
 
                     char hex[65] = {0};
-                    for (int i = 0; i < 32; ++i) sprintf(hex + i * 2, "%02x", digest[i]);
+                    for (int i = 0; i < 32; ++i) 
+                        sprintf(hex + i * 2, "%02x", digest[i]);
 
                     if (hash == String(hex)) {
                         found = true;
-                        cookie = "auth=" + name + "; Max-Age=2592000; Path=/"; // 30 days
+                        cookie = "auth=" + name + "; Max-Age=2592000; Path=/";
                         break;
                     }
                 }
@@ -178,7 +181,36 @@ public:
                 scheduler.addTask([]() { ESP.restart(); }, 100, false);
             }
         );
+        server.on("/clear-logs/", HTTP_POST,
+            [this](AsyncWebServerRequest* req) {
+                if (!isAuthenticated(req)) {
+                    req->send(403, "application/json", "{\"error\":\"Forbidden\"}");
+                    return;
+                }
 
+                if (!sd || !sd->ready()) {
+                    req->send(500, "application/json", "{\"error\":\"SD card not ready\"}");
+                    return;
+                }
+
+                if (!sd->removeDirRecursive("/logs")) {
+                    req->send(500, "application/json", "{\"error\":\"Failed to clear /logs directory\"}");
+                    return;
+                }
+                req->send(200, "application/json", "{\"status\":\"logs cleared\"}");
+            }
+        );
+
+        server.on("/restart/", HTTP_POST,
+            [this](AsyncWebServerRequest* req) {
+                if (!isAuthenticated(req)) {
+                    req->send(403, "application/json", "{\"error\":\"Forbidden\"}");
+                    return;
+                }
+                req->send(200, "application/json", "{\"status\":\"restarting\"}");
+                scheduler.addTask([]() { ESP.restart(); }, 100, false);  // delay a bit to let response finish
+            }
+        );
         server.on("/led/", HTTP_POST, [](AsyncWebServerRequest *req) {}, nullptr,
             [this](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
                 if (index != 0) return; // only process once
@@ -219,34 +251,48 @@ public:
             }
         );
 
-        server.on("/api/file/*", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            if (!isAuthenticated(req)) {
-                req->send(403, "text/plain", "Forbidden");
-                return;
-            }
-            String path = req->url(); 
-            String wildcard = path.substring(strlen("/api/file")); 
-            
-            if (!sd || !sd->ready()) {
-                req->send(500, "application/json", "{\"error\":\"SD card not ready\"}");
-                return;
-            }
+        server.on("/api/tree/", HTTP_GET, 
+            [this](AsyncWebServerRequest *request) {
+                StaticJsonDocument<8192> doc;
+                JsonObject root = doc.to<JsonObject>();
+                sd->buildFileTree(root);
 
-            if (!wildcard.startsWith("/")) wildcard = "/" + wildcard;
-
-            if (!sd->fileExists(wildcard)) {
-                req->send(404, "application/json", "{\"error\":\"File not found\"}");
-                return;
+                String output;
+                serializeJson(doc, output);
+                request->send(200, "application/json", output);
             }
+        );
 
-            File file = sd->openFile(wildcard, FILE_READ);
-            if (!file || file.isDirectory()) {
-                req->send(500, "application/json", "{\"error\":\"Failed to open file\"}");
-                return;
+        server.on("/api/file/*", HTTP_GET,
+            [this](AsyncWebServerRequest* req) {
+                if (!isAuthenticated(req)) {
+                    req->send(403, "text/plain", "Forbidden");
+                    return;
+                }
+                String path = req->url(); 
+                String wildcard = path.substring(strlen("/api/file")); 
+                
+                if (!sd || !sd->ready()) {
+                    req->send(500, "application/json", "{\"error\":\"SD card not ready\"}");
+                    return;
+                }
+
+                if (!wildcard.startsWith("/")) wildcard = "/" + wildcard;
+
+                if (!sd->fileExists(wildcard)) {
+                    req->send(404, "application/json", "{\"error\":\"File not found\"}");
+                    return;
+                }
+
+                File file = sd->openFile(wildcard, FILE_READ);
+                if (!file || file.isDirectory()) {
+                    req->send(500, "application/json", "{\"error\":\"Failed to open file\"}");
+                    return;
+                }
+
+                req->send(req->beginResponse(file, wildcard, "application/octet-stream", false));
             }
-
-            req->send(req->beginResponse(file, wildcard, "application/octet-stream", false));
-        });
+        );
 
         server.on("/api/file/*", HTTP_PUT, 
             [this](AsyncWebServerRequest *req) { // AUTH REQUIRED
@@ -308,8 +354,19 @@ public:
                 req->send(200, "application/json", "{\"status\":\"saved\"}");
             }
         );
+        server.on("/api/storage", HTTP_GET, 
+            [this](AsyncWebServerRequest *request) {
+                DynamicJsonDocument doc(256);
+                doc["total"] = sd->getTotalSpace();
+                doc["used"] = sd->getUsedSpace();
+                doc["free"] = sd->getFreeSpace();
+                String json;
+                serializeJson(doc, json);
+                request->send(200, "application/json", json);
+            }
+        );
 
-        // Not found handler for everything else
+        // 404
         server.onNotFound(
             [](AsyncWebServerRequest* req) {
                 Serial.printf("404 Not Found: %s\n", req->url().c_str());

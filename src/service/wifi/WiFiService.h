@@ -133,7 +133,7 @@ private:
     DNSServer dnsServer;
     char ssid[64] = {0};
     char pass[64] = {0};
-    uint8_t retriesLeft = 10;
+    uint8_t retriesLeft = 100;
     bool isReady;
     bool apMode;
 

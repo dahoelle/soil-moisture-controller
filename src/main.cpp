@@ -7,14 +7,18 @@ ServiceRegistry registry;
 
 EEPROMService service_eeprom(registry, scheduler);
 WiFiService service_wifi(registry, scheduler);
+WebCookieService service_webcookie(registry, scheduler);
 WebServerService service_webserver(registry, scheduler);
 SDCardService service_sdcard(registry, scheduler);
+SensorLoggingService service_sensorlog(registry, scheduler);
 
 std::vector<IService*> coreServices = {
     &service_eeprom,
     &service_wifi,
     &service_sdcard,
+    &service_webcookie,
     &service_webserver,
+    &service_sensorlog
 };
 
 size_t currentServiceIndex = 0;
@@ -22,7 +26,7 @@ bool waitingForReady = false;
 
 void startNextService() {
     if (currentServiceIndex >= coreServices.size()) {
-        // All services started, schedule updates, exit setup loop
+        //schedule updates, exit setup
         for (auto service : coreServices) {
             unsigned long cycle = service->cycleTimeMs();
             if (cycle > 0) {
@@ -32,7 +36,7 @@ void startNextService() {
             }
         }
         Serial.println("All services started.");
-        waitingForReady = false; // done waiting
+        waitingForReady = false;
         return;
     }
 
@@ -50,9 +54,10 @@ void startApp() {
     Serial.println("Registering services...");
     registry["EEPROM"] = &service_eeprom;
     registry["WIFI"] = &service_wifi;
+    registry["WEBCOOKIE"] = &service_webcookie;
     registry["WEBSERVER"] = &service_webserver;
     registry["SDCARD"] = &service_sdcard;
-
+    registry["SENSORLOG"] = &service_sensorlog;
     currentServiceIndex = 0;
     waitingForReady = false;
 
@@ -61,7 +66,6 @@ void startApp() {
 
 void updateApp() {
     scheduler.update();
-
     if (waitingForReady) {
         IService* service = coreServices[currentServiceIndex];
         if (service->ready()) {

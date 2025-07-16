@@ -125,6 +125,40 @@ public:
         file.close();
         return true;
     }
+    bool removeDirRecursive(const String& path) {
+        if (!SD.exists(path)) return false;
+
+        File dir = SD.open(path);
+        if (!dir || !dir.isDirectory()) return false;
+
+        File file = dir.openNextFile();
+        while (file) {
+            String fname = file.name();
+            String fullPath = path;
+            if (!fullPath.endsWith("/")) fullPath += "/";
+            fullPath += fname;
+
+            if (file.isDirectory()) {
+                if (!removeDirRecursive(fullPath)) {
+                    file.close();
+                    dir.close();
+                    return false;
+                }
+            } else {
+                if (!SD.remove(fullPath)) {
+                    file.close();
+                    dir.close();
+                    return false;
+                }
+            }
+            file.close();
+            file = dir.openNextFile();
+        }
+        dir.close();
+
+        return SD.rmdir(path);
+    }
+
 
     bool createDir(const String& path) {
         return SD.mkdir(path);
@@ -145,6 +179,64 @@ public:
             file = root.openNextFile();
         }
         return true;
+    }
+    
+    void buildFileTree(JsonObject &out) {
+        File root = SD.open("/");
+        if (!root || !root.isDirectory()) {
+            out["error"] = "Failed to open SD root";
+            return;
+        }
+        buildTreeRecursive(root, out);
+        root.close();
+    }
+
+    void buildTreeRecursive(File dir, JsonObject &node) {
+        node["name"] = String(dir.name());
+        node["type"] = "directory";
+        JsonArray children = node.createNestedArray("children");
+
+        File entry = dir.openNextFile();
+        while (entry) {
+            JsonObject child = children.createNestedObject();
+            if (entry.isDirectory()) {
+            buildTreeRecursive(entry, child);
+            } else {
+            child["name"] = String(entry.name());
+            child["type"] = "file";
+            }
+            entry.close();
+            entry = dir.openNextFile();
+        }
+    }
+
+    uint64_t getUsedSpace() {
+        File root = SD.open("/");
+        if (!root) return 0;
+        uint64_t used = calculateUsedSpace(root);
+        root.close();
+        return used;
+    }
+    uint64_t calculateUsedSpace(File dir) {
+        uint64_t total = 0;
+        File entry = dir.openNextFile();
+        while (entry) {
+            if (entry.isDirectory()) {
+                total += calculateUsedSpace(entry);  // Recurse
+            } else {
+                total += entry.size();  // File size
+            }
+            entry.close();
+            entry = dir.openNextFile();
+        }
+        return total;
+    }
+
+    uint64_t getTotalSpace() {
+        return 24ULL * 1024 * 1024 * 1024;  // 2GB in bytes
+    }
+    uint64_t getFreeSpace() {
+        return getTotalSpace() - getUsedSpace();
     }
 
 private:

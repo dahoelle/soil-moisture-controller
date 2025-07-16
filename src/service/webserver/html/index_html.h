@@ -105,6 +105,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       border: none;
       padding: 0.5rem 1rem;
       cursor: pointer;
+      margin-right: 0.5rem;
+    }
+
+    button.danger {
+      background: #b33;
+      color: #fff;
     }
   </style>
 </head>
@@ -113,6 +119,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <div class="sidebar">
     <button id="btn-home" class="active" onclick="showPanel('home')">🏠</button>
     <button id="btn-hydration" onclick="showPanel('hydration')">💧</button>
+    <button id="btn-graph" onclick="showPanel('graph')">📈</button>
+    <button id="btn-editor" onclick="showPanel('editor')">📝</button>
     <button id="btn-config" onclick="showPanel('config')">⚙️</button>
   </div>
 
@@ -141,10 +149,18 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       </div>
     </div>
 
-
-
     <div id="hydration-panel" class="panel">
       <p>Hydration panel content</p>
+    </div>
+
+    <div id="graph-panel" class="panel">
+      <!-- Content loaded dynamically -->
+      <div id="graph-content">Loading graph...</div>
+    </div>
+
+    <div id="editor-panel" class="panel">
+      <!-- Content loaded dynamically -->
+      <div id="editor-content">Loading editor...</div>
     </div>
 
     <div id="config-panel" class="panel">
@@ -160,6 +176,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         </div>
         <button class="save" id="wifi-save">Save</button>
       </div>
+
+      <div class="config-section" style="margin-top:2rem;">
+        <h2>Maintenance</h2>
+        <button class="save danger" id="clear-logs">Clear Logs</button>
+        <button class="save danger" id="restart-device">Restart Device</button>
+      </div>
     </div>
   </div>
 
@@ -170,6 +192,42 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
       document.querySelectorAll(".sidebar button").forEach(b => b.classList.remove("active"));
       document.getElementById("btn-" + name).classList.add("active");
+
+      if (name === "graph") {
+        fetchGraphContent();
+      } else if (name === "editor") {
+        fetchEditorContent();
+      }
+    }
+
+    function fetchGraphContent() {
+      fetch("/graph")
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.text();
+        })
+        .then(html => {
+          document.getElementById("graph-content").innerHTML = html;
+        })
+        .catch(err => {
+          console.error("Error loading graph content:", err);
+          document.getElementById("graph-content").innerHTML = "<p>Failed to load graph content.</p>";
+        });
+    }
+
+    function fetchEditorContent() {
+      fetch("/editor")
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.text();
+        })
+        .then(html => {
+          document.getElementById("editor-content").innerHTML = html;
+        })
+        .catch(err => {
+          console.error("Error loading editor content:", err);
+          document.getElementById("editor-content").innerHTML = "<p>Failed to load editor content.</p>";
+        });
     }
 
     function updateWifiConfig() {
@@ -233,12 +291,51 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       });
     }
 
+    function clearLogs() {
+      if (!confirm("Are you sure you want to clear all logs? This action cannot be undone.")) return;
+
+      fetch("/clear-logs/", {
+        method: "POST"
+      })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        alert(data.status || "Logs cleared.");
+      })
+      .catch(err => {
+        console.error("Clear logs error:", err);
+        alert("Failed to clear logs: " + err.message);
+      });
+    }
+
+    function restartDevice() {
+      if (!confirm("Are you sure you want to restart the device?")) return;
+
+      fetch("/restart/", {
+        method: "POST"
+      })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        alert(data.status || "Device restarting...");
+      })
+      .catch(err => {
+        console.error("Restart error:", err);
+        alert("Failed to restart device: " + err.message);
+      });
+    }
+
     document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("wifi-save").addEventListener("click", updateWifiConfig);
       document.getElementById("led-set").addEventListener("click", updateLED);
       document.getElementById("led-off").addEventListener("click", turnOffLED);
+      document.getElementById("clear-logs").addEventListener("click", clearLogs);
+      document.getElementById("restart-device").addEventListener("click", restartDevice);
     });
-
   </script>
 
 </body>
